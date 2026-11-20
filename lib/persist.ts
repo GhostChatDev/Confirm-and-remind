@@ -4,6 +4,7 @@ import type { Store } from './store';
 
 // DEMO ONLY: when Supabase is not configured, the mock server store is kept in a JSON file
 // so it survives a server restart. Not for production data (no locking across processes).
+// Set DEMO_STORE_FILE outside the build output directory for production demo deployments.
 const FILE = process.env.DEMO_STORE_FILE || join(process.cwd(), '.data', 'demo-store.json');
 let loadedOnce = false;
 

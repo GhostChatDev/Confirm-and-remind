@@ -48,7 +48,7 @@ export function route(fn: (a: Args) => Promise<unknown> | unknown, opts: { limit
       const id = new URL(req.url).searchParams.get('id') || '';
       if (demo()) loadStore(globalStore);
       const out = await fn({ userId, req, store: globalStore, id, body });
-      if (demo() && req.method !== 'GET') saveStore(globalStore);
+      if (demo()) saveStore(globalStore);
       return NextResponse.json(out ?? { ok: true });
     } catch (e) {
       if (e instanceof NotFoundError) return NextResponse.json({ error: 'Not found' }, { status: 404 });

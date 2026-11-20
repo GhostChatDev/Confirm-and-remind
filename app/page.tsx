@@ -55,8 +55,12 @@ export default function Home() {
       if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
     })().catch(() => setMsg('Could not load the app configuration.'));
   }, []);
-  useEffect(() => { if (signedIn && !loaded.current) { loaded.current = true; refresh(); } }, [signedIn, refresh]);
-  useEffect(() => { if (signedIn) { const h = setTimeout(() => refresh(search), 250); return () => clearTimeout(h); } }, [search, signedIn, refresh]);
+  useEffect(() => {
+    if (!signedIn || loaded.current) return;
+    loaded.current = true;
+    const h = setTimeout(() => refresh(search), 250);
+    return () => clearTimeout(h);
+  }, [search, signedIn, refresh]);
 
   const run = async (fn: () => Promise<unknown>, ok = '') => {
     try { await fn(); setMsg(ok); await refresh(search); } catch (e) { setMsg(errText(e)); }
@@ -85,7 +89,7 @@ export default function Home() {
       <nav className="nav" aria-label="Main">{SCREENS.map((s) => <button key={s} className="button" aria-current={screen === s ? 'page' : undefined} onClick={() => setScreen(s)}>{s}</button>)}</nav></aside>
     <main className="page"><header><h1>{screen}</h1></header>
       {!online && <div className="warning">Offline or server unreachable. Anything you type is kept as a draft on this device. Reminders are not scheduled until the server confirms.</div>}
-      {demoMode() && <div className="warning">Demo mode: Supabase is not configured, so sign-in is not verified and data lives in server memory only.</div>}
+      {demoMode() && <div className="warning">Demo mode: sign-in is not verified. Data is saved to a local JSON file on this server; this is not production storage.</div>}
       {msg && <p role="status" className="error">{msg}</p>}
       {screen === 'Today' && <>
         <div className="card capture"><h2>Add note</h2>

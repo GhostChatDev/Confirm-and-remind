@@ -4,6 +4,7 @@ import { globalStore } from '@/lib/store';
 import { runDispatch } from '@/lib/dispatch';
 import { makeSender } from '@/lib/webpush';
 import { rateLimit } from '@/lib/ratelimit';
+import { loadStore, saveStore } from '@/lib/persist';
 export const dynamic = 'force-dynamic';
 
 // Called by the scheduler (cron) with "Authorization: Bearer <CRON_SECRET>". Never called by browser timers.
@@ -15,5 +16,8 @@ export async function POST(req: Request) {
   if (!rateLimit('dispatch', 30)) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   const send = makeSender();
   if (!send) return NextResponse.json({ error: 'Push is not configured (VAPID keys missing)' }, { status: 503 });
-  return NextResponse.json(await runDispatch(globalStore, send));
+  if (!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)) loadStore(globalStore);
+  const result = await runDispatch(globalStore, send);
+  if (!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)) saveStore(globalStore);
+  return NextResponse.json(result);
 }
