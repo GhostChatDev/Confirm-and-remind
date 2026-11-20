@@ -410,14 +410,22 @@ jobs:
                       await page.goto(url, { waitUntil: "load", timeout: 20000 });
                       await page.waitForTimeout(WAIT * 500);
                       // What a person would see change: the visible text (a number moves, a panel opens), how many
-                      // things are visible (a menu or dialog appears), or the address. A style that only flickers doesn't count.
+                      // things are visible (a menu or dialog appears), the address, or which option is picked (a category
+                      // or tab that becomes the selected one only moves a highlight and a tick). A style that only flickers doesn't count.
                       const sig = () => page.evaluate(() => {
                         let shown = 0;
+                        let picked = "";
+                        let i = 0;
                         for (const el of document.body.querySelectorAll("*")) {
+                          i++;
                           const r = el.getBoundingClientRect();
                           if (r.width > 1 && r.height > 1 && getComputedStyle(el).visibility !== "hidden" && Number(getComputedStyle(el).opacity) > 0.05) shown++;
+                          const cls = (typeof el.className === "string" ? el.className : "").toLowerCase();
+                          const on = ["aria-pressed", "aria-selected", "aria-checked", "aria-expanded", "aria-current", "data-state"].map((a) => el.getAttribute(a) || "").join(",");
+                          const chosen = /(^|[^a-z])(active|selected|is-active|current|checked|on)([^a-z]|$)/.test(cls) || el.checked === true;
+                          if (chosen || on.replace(/,/g, "")) picked += i + ":" + on + (chosen ? "+" : "") + ";";
                         }
-                        return location.href + "|" + shown + "|" + document.body.innerText;
+                        return location.href + "|" + shown + "|" + picked + "|" + document.body.innerText;
                       });
                       const before = await sig();
                       let dialog = false;
