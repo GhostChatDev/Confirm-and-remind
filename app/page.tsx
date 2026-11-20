@@ -1,43 +1,236 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
-import { readDraft, writeDraft } from '../lib/draft';
-import { defaults, formatDate, markdown, tomorrowMorning, uid, type Note, type Task, type Preferences } from '../lib/model';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api, demoMode, loadConfig, signIn, signOut, token, type Config } from '@/lib/client';
+import { readDraft, writeDraft } from '@/lib/draft';
 
-type Screen = 'Today' | 'Notes' | 'Upcoming' | 'Review' | 'Settings';
-const screens: Screen[] = ['Today', 'Notes', 'Upcoming', 'Review', 'Settings'];
-const paths: Record<Screen, string> = {Today:'M3 11 12 3l9 8v9H5v-9', Notes:'M5 3h14v18H5z M8 8h8 M8 12h8 M8 16h5', Upcoming:'M4 6h16v14H4z M8 3v6 M16 3v6 M4 10h16', Review:'M4 4h16v16H4z M8 12l3 3 5-6', Settings:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M19 5l-2 2 M7 17l-2 2'};
-function Icon({ screen }: {screen: Screen}) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[screen]} /></svg>; }
-function load<T>(key: string, fallback: T): T { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : fallback; }
-function download(name: string, data: string, type: string) { const url = URL.createObjectURL(new Blob([data], {type})); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url); }
+type Occ = { id: string; reminder_id: string; scheduled_at: string; status: string; label: string };
+type Task = { id: string; title: string; due_at: string | null; status: 'open' | 'done' | 'dismissed'; occurrences: Occ[] };
+type Note = { id: string; text: string; pinned: boolean; version: number; updated_at: string };
+type Prefs = { timezone: string; show_title: boolean };
+type Device = { id: string; label: string; active: boolean };
+const SCREENS = ['Today', 'Notes', 'Upcoming', 'Review', 'Settings'] as const;
+type Screen = (typeof SCREENS)[number];
+const fmt = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+const day = (iso: string) => new Date(iso).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+const errText = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong');
+const activeOcc = (t: Task) => [...t.occurrences].sort((a, b) => b.scheduled_at.localeCompare(a.scheduled_at))[0];
+const whenOf = (t: Task) => activeOcc(t)?.scheduled_at || t.due_at || '';
+const b64 = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(s.length / 4) * 4, '=')), (c) => c.charCodeAt(0));
+const key = (b: ArrayBuffer | null) => (b ? btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : '');
 
 export default function Home() {
-  const [screen,setScreen]=useState<Screen>('Today');
-  const [notes,setNotes]=useState<Note[]>([]); const [tasks,setTasks]=useState<Task[]>([]);
-  const [prefs,setPrefs]=useState<Preferences>(defaults); const [ready,setReady]=useState(false);
-  const [dialog,setDialog]=useState<'note'|'task'|null>(null); const [editing,setEditing]=useState<string|null>(null);
-  const [text,setText]=useState(''); const [title,setTitle]=useState(''); const [due,setDue]=useState(''); const [remind,setRemind]=useState('');
-  const [filter,setFilter]=useState('open'); const [search,setSearch]=useState(''); const [message,setMessage]=useState('');
-  const draftRevision = useRef(0);
-  useEffect(()=>{ try { const savedNotes=load<Note[]>('cr-notes',[]); const savedTasks=load<Task[]>('cr-tasks',[]); const savedPrefs=load<Preferences>('cr-prefs',defaults); setNotes(savedNotes); setTasks(savedTasks); setPrefs(savedPrefs); setReady(true); } catch { setMessage('Device storage could not be read. Existing data was not overwritten; check your browser storage before saving.'); } if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{}); },[]);
-  useEffect(()=>{ if(ready) {try {localStorage.setItem('cr-notes',JSON.stringify(notes));localStorage.setItem('cr-tasks',JSON.stringify(tasks));localStorage.setItem('cr-prefs',JSON.stringify(prefs));} catch {setMessage('Device storage failed. Recent changes may not survive a reload; export your data.');}} },[notes,tasks,prefs,ready]);
-  const openNote=async (note?:Note)=>{const revision=++draftRevision.current;setEditing(note?.id||null);setText(note?.text||'');setDialog('note');if(!note){try{const draft=await readDraft('new-note');if(draft && draftRevision.current===revision)setText(draft);}catch{setMessage('Draft recovery is unavailable in this browser.');}}};
-  const saveNote=()=>{if(!text.trim())return;if(!ready){setMessage('Could not read device storage. Your draft has not been cleared.');return;}const now=new Date().toISOString();const next=editing?notes.map(n=>n.id===editing?{...n,text,version:(n.version || 1)+1,updated_at:now}:n):[{id:uid(),text,pinned:false,version:1,created_at:now,updated_at:now},...notes];try{localStorage.setItem('cr-notes',JSON.stringify(next));}catch{setMessage('Could not save this note on this device. Your draft has not been cleared.');return;}setNotes(next);draftRevision.current++;if(!editing)void writeDraft('new-note','').catch(()=>setMessage('Note saved, but its draft could not be cleared.'));setDialog(null);setScreen('Notes');};
-  const saveTask=()=>{if(!title.trim())return;const task:Task={id:uid(),title,due_at:due?new Date(due).toISOString():null,reminder_at:remind?new Date(remind).toISOString():null,status:'open',created_at:new Date().toISOString()};setTasks(t=>[task,...t]);setTitle('');setDue('');setRemind('');setDialog(null);setScreen('Upcoming');};
-  const updateTask=(id:string,patch:Partial<Task>)=>setTasks(t=>t.map(item=>item.id===id?{...item,...patch}:item));
-  const filteredNotes=notes.filter(n=>n.text.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>Number(b.pinned)-Number(a.pinned));
+  const [cfg, setCfg] = useState<Config | null>(null);
+  const [signedIn, setSignedIn] = useState(false);
+  const [screen, setScreen] = useState<Screen>('Today');
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [prefs, setPrefs] = useState<Prefs>({ timezone: 'UTC', show_title: false });
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [msg, setMsg] = useState('');
+  const [online, setOnline] = useState(true);
+  const [draft, setDraft] = useState('');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'open' | 'done' | 'all'>('open');
+  const [focusId, setFocusId] = useState('');
+  const [editing, setEditing] = useState<Note | null>(null);
+  const loaded = useRef(false);
+
+  const refresh = useCallback(async (q = '') => {
+    try {
+      const [n, t, p, d] = await Promise.all([
+        api<{ notes: Note[] }>('/api/notes' + (q ? `?q=${encodeURIComponent(q)}` : '')), api<{ tasks: Task[] }>('/api/tasks'),
+        api<{ prefs: Prefs }>('/api/prefs'), api<{ devices: Device[] }>('/api/push'),
+      ]);
+      setNotes(n.notes); setTasks(t.tasks); setPrefs(p.prefs); setDevices(d.devices); setOnline(true);
+    } catch (e) { setOnline(false); setMsg(errText(e)); }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      setCfg(await loadConfig());
+      setDraft(await readDraft('new-note').catch(() => ''));
+      setSignedIn(Boolean(await token()));
+      const id = new URLSearchParams(location.search).get('taskId');
+      if (id) setFocusId(id);
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+    })().catch(() => setMsg('Could not load the app configuration.'));
+  }, []);
+  useEffect(() => { if (signedIn && !loaded.current) { loaded.current = true; refresh(); } }, [signedIn, refresh]);
+  useEffect(() => { if (signedIn) { const h = setTimeout(() => refresh(search), 250); return () => clearTimeout(h); } }, [search, signedIn, refresh]);
+
+  const run = async (fn: () => Promise<unknown>, ok = '') => {
+    try { await fn(); setMsg(ok); await refresh(search); } catch (e) { setMsg(errText(e)); }
+  };
+  const onDraft = (v: string) => { setDraft(v); writeDraft('new-note', v).catch(() => setMsg('Could not keep a draft on this device.')); };
+  const saveNote = async () => {
+    if (!draft.trim()) return;
+    try { await api('/api/notes', 'POST', { text: draft }); await writeDraft('new-note', ''); setDraft(''); setMsg('Note saved.'); await refresh(search); }
+    catch (e) { setOnline(false); setMsg(`Not saved to the server (${errText(e)}). Your text is kept as a draft on this device.`); }
+  };
+
+  if (!cfg) return <main className="page"><p role="status">Loading…</p></main>;
+  if (!signedIn) return <SignIn onDone={() => { loaded.current = false; setSignedIn(true); }} />;
   const today = new Date().toDateString();
-  const todayTasks=tasks.filter(t=>t.status==='open' && ((t.due_at && new Date(t.due_at).toDateString()===today) || (t.reminder_at && new Date(t.reminder_at).toDateString()===today) || (t.due_at && new Date(t.due_at)<new Date())));
-  const upcoming=tasks.filter(t=>filter==='all'||(filter==='open'?t.status==='open':t.status!=='open')).sort((a,b)=>(a.reminder_at||a.due_at||'9999').localeCompare(b.reminder_at||b.due_at||'9999'));
-  return <div className="shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">✓</span><span>Confirm & Remind<small>Make room for what matters.</small></span></div><nav className="nav" aria-label="Main navigation">{screens.map(s=><button key={s} aria-current={screen===s?'page':undefined} onClick={()=>setScreen(s)}><Icon screen={s}/>{s}</button>)}</nav><p className="side-note">Write it down.<br/>Confirm what matters.<br/>Get reminded.</p></aside><main className="main">
-    <header className="page"><div><span className="eyebrow">Your everyday companion</span><h1>{screen}</h1><p className="subtle">{screen==='Today'?'A little clarity for your day.':screen==='Notes'?'Everything you want to remember.':screen==='Upcoming'?'A clear view of what’s ahead.':screen==='Review'?'Your review space.':'Make this space yours.'}</p></div></header>
-    <div className="warning">Local preview only: notes and tasks stay on this device. Reminders are not scheduled and no notifications will be sent.</div>{message && <p role="status" className="error">{message}</p>}
-    {screen==='Today' && <><div className="card capture"><h2>Make space for your thoughts</h2><p className="subtle">Capture it now, come back to it when you need it.</p><button className="button primary" onClick={()=>void openNote()}>+ Add note</button></div><section className="section"><div className="section-head"><h2>Today & overdue</h2><button className="button small" onClick={()=>setDialog('task')}>+ Add task</button></div><TaskList tasks={todayTasks} prefs={prefs} update={updateTask}/></section></>}
-    {screen==='Notes' && <><div className="row between"><label className="field grow"><span>Search notes</span><input type="search" placeholder="Search your notes" value={search} onChange={e=>setSearch(e.target.value)}/></label><button className="button primary" onClick={()=>void openNote()}>+ Add note</button></div><div className="stack">{filteredNotes.length?filteredNotes.map(n=><article className="card" key={n.id}><div className="row between"><span className="note-meta">{n.pinned?'Pinned · ':''}{formatDate(n.updated_at,prefs.timezone)}</span></div><p className="note-text">{n.text}</p><div className="actions"><button className="button small" onClick={()=>void openNote(n)}>Edit</button><button className="button small" onClick={()=>setNotes(v=>v.map(x=>x.id===n.id?{...x,pinned:!x.pinned}:x))}>{n.pinned?'Unpin':'Pin'}</button><button className="button small" onClick={()=>{setTitle(n.text.split('\n')[0]);setDialog('task');}}>Create task</button><button className="button small danger" onClick={()=>{if(confirm('Delete this note?'))setNotes(v=>v.filter(x=>x.id!==n.id));}}>Delete</button></div></article>):<Empty title="No notes here yet" text="Write something down so you can come back to it later."/>}</div></>}
-    {screen==='Upcoming' && <><div className="section-head"><div className="tabs">{['open','done','all'].map(f=><button className="button small" key={f} aria-pressed={filter===f} onClick={()=>setFilter(f)}>{f==='open'?'Not done':f==='done'?'Done':'All'}</button>)}</div><button className="button primary" onClick={()=>setDialog('task')}>+ Add task</button></div><TaskList tasks={upcoming} prefs={prefs} update={updateTask}/></>}
-    {screen==='Review' && <Empty title="Nothing to review yet" text="This space will be ready for a future update."/>}
-    {screen==='Settings' && <div className="card"><h2>Preferences</h2><label className="field">Time zone<input value={prefs.timezone} onChange={e=>setPrefs(p=>({...p,timezone:e.target.value}))}/><span className="hint">Use an IANA name, for example America/Toronto.</span></label><div className="row"><label className="field grow">Quiet hours start<input type="time" value={prefs.quiet_start} onChange={e=>setPrefs(p=>({...p,quiet_start:e.target.value}))}/></label><label className="field grow">Quiet hours end<input type="time" value={prefs.quiet_end} onChange={e=>setPrefs(p=>({...p,quiet_end:e.target.value}))}/></label></div><p className="hint">Quiet hours are saved locally but not enforced in this preview.</p><div className="settings-row"><h3>Notifications</h3><p className="subtle">Notifications require a configured server and push service.</p><button className="button" onClick={()=>setMessage('Notifications are unavailable in the local preview.')}>Enable notifications</button></div><div className="settings-row"><h3>Export your data</h3><div className="actions"><button className="button" onClick={()=>download('confirm-remind.json',JSON.stringify({notes,tasks},null,2),'application/json')}>Export JSON</button><button className="button" onClick={()=>download('confirm-remind.md',markdown(notes,tasks),'text/markdown')}>Export Markdown</button></div></div><div className="settings-row"><h3>Local data</h3><p className="subtle">This preview does not have an account.</p><button className="button danger" onClick={()=>{if(confirm('Delete all local notes and tasks?')){setNotes([]);setTasks([]);setMessage('Local notes and tasks deleted.');}}}>Delete local data</button></div></div>}
-  </main>{dialog && <div className="modal-bg" onClick={()=>setDialog(null)}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onClick={e=>e.stopPropagation()}><div className="row between"><h2 id="dialog-title">{dialog==='note'?(editing?'Edit note':'Add a note'):'Add a task'}</h2><button className="button small" onClick={()=>setDialog(null)}>Close</button></div>{dialog==='note'?<><label className="field">Your note<textarea autoFocus value={text} onChange={e=>{setText(e.target.value);if(!editing)void writeDraft('new-note',e.target.value).catch(()=>setMessage('Draft recovery is unavailable.'));}} placeholder="Write it down..."/></label><p className="hint">Your draft is kept on this device.</p><button className="button primary" onClick={saveNote} disabled={!text.trim()}>Save note</button></>:<><label className="field">Task title<input autoFocus value={title} onChange={e=>setTitle(e.target.value)} placeholder="What needs doing?"/></label><label className="field">Due date (optional)<input type="datetime-local" value={due} onChange={e=>setDue(e.target.value)}/></label><label className="field">Reminder time (optional)<input type="datetime-local" value={remind} onChange={e=>setRemind(e.target.value)}/></label><p className="hint">Reminders are not scheduled in the local preview.</p><button className="button primary" onClick={saveTask} disabled={!title.trim()}>Save task</button></>}</div></div>}</div>;
+  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+  const open = tasks.filter((t) => t.status === 'open');
+  const overdue = open.filter((t) => t.due_at && new Date(t.due_at) < startToday);
+  const todays = open.filter((t) => !overdue.includes(t) && [t.due_at, activeOcc(t)?.scheduled_at].some((x) => x && new Date(x).toDateString() === today));
+  const focus = tasks.find((t) => t.id === focusId);
+  const shown = tasks.filter((t) => filter === 'all' || (filter === 'open') === (t.status === 'open')).sort((a, b) => (whenOf(a) || '9').localeCompare(whenOf(b) || '9'));
+  const groups = [...new Set(shown.map((t) => (whenOf(t) ? day(whenOf(t)) : 'No date')))];
+  const list = (ts: Task[]) => ts.map((t) => <TaskCard key={t.id} t={t} run={run} hi={t.id === focusId} />);
+
+  return <div className="shell">
+    <aside className="sidebar"><div className="brand"><span className="brand-mark">✓</span><span>Confirm &amp; Remind<small>Write it down. Confirm what matters. Get reminded.</small></span></div>
+      <nav className="nav" aria-label="Main">{SCREENS.map((s) => <button key={s} className="button" aria-current={screen === s ? 'page' : undefined} onClick={() => setScreen(s)}>{s}</button>)}</nav></aside>
+    <main className="page"><header><h1>{screen}</h1></header>
+      {!online && <div className="warning">Offline or server unreachable. Anything you type is kept as a draft on this device. Reminders are not scheduled until the server confirms.</div>}
+      {demoMode() && <div className="warning">Demo mode: Supabase is not configured, so sign-in is not verified and data lives in server memory only.</div>}
+      {msg && <p role="status" className="error">{msg}</p>}
+      {screen === 'Today' && <>
+        <div className="card capture"><h2>Add note</h2>
+          <label className="field"><span>New note</span><textarea rows={4} value={draft} placeholder="Type it here. Save is instant." onChange={(e) => onDraft(e.target.value)} /></label>
+          <button className="button primary" onClick={saveNote} disabled={!draft.trim()}>Save note</button></div>
+        <TaskForm run={run} notes={notes} />
+        {focus && <section><h2>Opened from your notification</h2>{list([focus])}</section>}
+        <section><h2>Overdue</h2>{overdue.length ? list(overdue) : <p className="subtle">Nothing overdue.</p>}</section>
+        <section><h2>Today</h2>{todays.length ? list(todays) : <p className="subtle">No tasks or reminders today.</p>}</section></>}
+      {screen === 'Notes' && <>
+        <label className="field"><span>Search notes</span><input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search your notes" /></label>
+        {notes.length === 0 && <div className="card empty"><strong>No notes yet</strong><span>Add one from Today.</span></div>}
+        {notes.map((n) => <article className="card" key={n.id}>
+          {n.pinned && <span className="badge">Pinned</span>}
+          <p style={{ whiteSpace: 'pre-wrap' }}>{n.text}</p><p className="subtle">Version {n.version} · {fmt(n.updated_at)}</p>
+          <div className="actions"><button className="button small" onClick={() => setEditing(n)}>Edit</button>
+            <button className="button small" onClick={() => run(() => api(`/api/note?id=${n.id}`, 'PATCH', { pinned: !n.pinned }))}>{n.pinned ? 'Unpin' : 'Pin'}</button>
+            <button className="button small" onClick={() => confirm('Delete this note?') && run(() => api(`/api/note?id=${n.id}`, 'DELETE'), 'Note deleted.')}>Delete</button></div></article>)}
+        {editing && <EditNote n={editing} close={() => setEditing(null)} run={run} />}</>}
+      {screen === 'Upcoming' && <>
+        <div className="tabs" role="group" aria-label="Filter">{(['open', 'done', 'all'] as const).map((f) => <button key={f} className="button small" aria-pressed={filter === f} onClick={() => setFilter(f)}>{f === 'open' ? 'Not done' : f === 'done' ? 'Done' : 'All'}</button>)}</div>
+        {shown.length === 0 && <div className="card empty"><strong>Nothing here</strong></div>}
+        {groups.map((g) => <section key={g}><h2>{g}</h2>{list(shown.filter((t) => (whenOf(t) ? day(whenOf(t)) : 'No date') === g))}</section>)}</>}
+      {screen === 'Review' && <div className="card empty"><span className="empty-icon" aria-hidden="true">✓</span><strong>Nothing to review yet</strong></div>}
+      {screen === 'Settings' && <SettingsPane prefs={prefs} devices={devices} cfg={cfg} run={run} setMsg={setMsg} notes={notes} tasks={tasks} onOut={async () => { await signOut(); loaded.current = false; setSignedIn(false); setNotes([]); setTasks([]); }} />}
+    </main></div>;
 }
 
-function Empty({title,text}:{title:string;text:string}){return <div className="card empty"><span className="empty-icon" aria-hidden="true">✓</span><strong>{title}</strong><span>{text}</span></div>}
-function TaskList({tasks,prefs,update}:{tasks:Task[];prefs:Preferences;update:(id:string,patch:Partial<Task>)=>void}){if(!tasks.length)return <Empty title="All clear" text="Nothing here right now."/>;return <div className="stack">{tasks.map(t=><article className="card task" key={t.id}><div className="task-title">{t.title}</div><small>{t.due_at?`Due ${formatDate(t.due_at,prefs.timezone)}`:'No due date'}{t.reminder_at?` · Reminder ${formatDate(t.reminder_at,prefs.timezone)}`:''}</small>{t.reminder_at && t.status==='open' && <p className="hint">Saved on this device. Reminder is not scheduled yet.</p>}<div className="actions">{t.status==='open'?<><button className="button small" onClick={()=>update(t.id,{status:'done'})}>Done</button><button className="button small" onClick={()=>update(t.id,{reminder_at:new Date(Date.now()+600000).toISOString()})}>Snooze 10 min</button><button className="button small" onClick={()=>update(t.id,{reminder_at:new Date(Date.now()+3600000).toISOString()})}>Snooze 1 hour</button><button className="button small" onClick={()=>update(t.id,{reminder_at:tomorrowMorning(new Date()).toISOString()})}>Tomorrow morning</button></>:<><span className="badge">{t.status}</span><button className="button small" onClick={()=>update(t.id,{status:'open'})}>Reopen</button></>}</div></article>)}</div>}
+type Run = (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
+const toLocalInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+function SignIn({ onDone }: { onDone: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [create, setCreate] = useState(false);
+  const [err, setErr] = useState('');
+  const demo = demoMode();
+  const submit = async (e: React.FormEvent) => { e.preventDefault(); const r = await signIn(email, password, create); if (r) setErr(r); else onDone(); };
+  return <main className="page"><form className="card" onSubmit={submit}>
+    <h1>Confirm &amp; Remind</h1><p className="subtle">Write it down. Confirm what matters. Get reminded.</p>
+    {demo && <p className="warning">Demo mode: Supabase is not configured. Pick any name; it is not verified.</p>}
+    <label className="field"><span>{demo ? 'Name' : 'Email'}</span><input value={email} onChange={(e) => setEmail(e.target.value)} type={demo ? 'text' : 'email'} autoComplete="username" required /></label>
+    {!demo && <label className="field"><span>Password</span><input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete={create ? 'new-password' : 'current-password'} required minLength={8} /></label>}
+    {err && <p role="alert" className="error">{err}</p>}
+    <button className="button primary" type="submit">{create ? 'Create account' : 'Sign in'}</button>
+    {!demo && <button className="button" type="button" onClick={() => setCreate(!create)}>{create ? 'I have an account' : 'Create an account'}</button>}
+  </form></main>;
+}
+
+function TaskForm({ run, notes }: { run: Run; notes: Note[] }) {
+  const [title, setTitle] = useState('');
+  const [due, setDue] = useState('');
+  const [remind, setRemind] = useState('');
+  const [noteId, setNoteId] = useState('');
+  const add = () => run(async () => {
+    const { task } = await api<{ task: Task }>('/api/tasks', 'POST', { title, due_at: due ? new Date(due).toISOString() : undefined, note_id: noteId || undefined });
+    if (remind) await api('/api/reminders', 'POST', { task_id: task.id, remind_at: new Date(remind).toISOString() });
+    setTitle(''); setDue(''); setRemind(''); setNoteId('');
+  }, 'Task added.');
+  return <div className="card"><h2>Add task</h2>
+    <label className="field"><span>Task title</span><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Pay the electricity bill" /></label>
+    <label className="field"><span>Due date (optional)</span><input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} /></label>
+    <label className="field"><span>Reminder time (optional, separate from due date)</span><input type="datetime-local" value={remind} onChange={(e) => setRemind(e.target.value)} /></label>
+    {notes.length > 0 && <label className="field"><span>From note (optional)</span><select value={noteId} onChange={(e) => setNoteId(e.target.value)}><option value="">None</option>{notes.map((n) => <option key={n.id} value={n.id}>{n.text.slice(0, 40)}</option>)}</select></label>}
+    <button className="button primary" onClick={add} disabled={!title.trim()}>Add task</button></div>;
+}
+
+function TaskCard({ t, run, hi }: { t: Task; run: Run; hi: boolean }) {
+  const o = activeOcc(t);
+  const [at, setAt] = useState('');
+  const isOpen = t.status === 'open';
+  const act = (a: object, ok: string) => o && run(() => api(`/api/reminder?id=${o.reminder_id}`, 'PATCH', a), ok);
+  return <article className="card" style={hi ? { outline: '3px solid var(--accent, #28634c)' } : undefined}>
+    <h3>{t.title}</h3>
+    <p className="subtle">{t.due_at ? `Due ${fmt(t.due_at)}` : 'No due date'} · {t.status === 'open' ? 'Open' : t.status === 'done' ? 'Done' : 'Dismissed'}</p>
+    {o ? <p><span className="badge">{o.label}</span> {fmt(o.scheduled_at)}</p> : <p className="subtle">No reminder.</p>}
+    <div className="actions">
+      {isOpen ? <button className="button small" onClick={() => run(() => api(`/api/task?id=${t.id}`, 'PATCH', { status: 'done' }), 'Marked done.')}>Done</button>
+        : <button className="button small" onClick={() => run(() => api(`/api/task?id=${t.id}`, 'PATCH', { status: 'open' }), 'Reopened.')}>Reopen</button>}
+      {isOpen && <button className="button small" onClick={() => run(() => api(`/api/task?id=${t.id}`, 'PATCH', { status: 'dismissed' }), 'Dismissed.')}>Dismiss</button>}
+    </div>
+    {isOpen && o && <div className="actions" aria-label="Snooze">
+      <button className="button small" onClick={() => act({ action: 'snooze', how: '10m' }, 'Snoozed 10 minutes.')}>Snooze 10 min</button>
+      <button className="button small" onClick={() => act({ action: 'snooze', how: '1h' }, 'Snoozed 1 hour.')}>Snooze 1 hour</button>
+      <button className="button small" onClick={() => act({ action: 'snooze', how: 'tomorrow' }, 'Snoozed until tomorrow morning.')}>Tomorrow morning</button>
+      <input aria-label={`Reschedule ${t.title}`} type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} min={toLocalInput(new Date())} />
+      <button className="button small" disabled={!at} onClick={() => act({ action: 'reschedule', remind_at: new Date(at).toISOString() }, 'Rescheduled.')}>Reschedule</button>
+    </div>}
+  </article>;
+}
+
+function EditNote({ n, close, run }: { n: Note; close: () => void; run: Run }) {
+  const [text, setText] = useState(n.text);
+  return <div className="card" role="dialog" aria-label="Edit note"><h2>Edit note</h2>
+    <label className="field"><span>Note text</span><textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} /></label>
+    <p className="subtle">Each save keeps the earlier text in the version history.</p>
+    <div className="actions"><button className="button primary" disabled={!text.trim()} onClick={async () => { await run(() => api(`/api/note?id=${n.id}`, 'PATCH', { text }), 'Note updated.'); close(); }}>Save changes</button>
+      <button className="button" onClick={close}>Cancel</button></div></div>;
+}
+
+function download(name: string, mime: string, content: string) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type: mime })); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+function SettingsPane({ prefs, devices, cfg, run, setMsg, notes, tasks, onOut }: { prefs: Prefs; devices: Device[]; cfg: Config; run: Run; setMsg: (s: string) => void; notes: Note[]; tasks: Task[]; onOut: () => void }) {
+  const [tz, setTz] = useState(prefs.timezone);
+  const ios = typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const standalone = typeof window !== 'undefined' && (window.matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone === true);
+  const needsHome = ios && !standalone;
+  const enable = async () => {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('This browser does not support push notifications.');
+      if (!cfg.vapidPublicKey) throw new Error('Push is not configured on the server (VAPID keys missing).');
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') throw new Error('Notifications were not allowed.');
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(cfg.vapidPublicKey) }));
+      await api('/api/push', 'POST', { endpoint: sub.endpoint, p256dh: key(sub.getKey('p256dh')), auth: key(sub.getKey('auth')), label: navigator.platform || 'This device' });
+      setMsg('Notifications enabled on this device.'); await run(async () => {});
+    } catch (e) { setMsg(errText(e)); }
+  };
+  const doExport = async (kind: 'json' | 'md') => {
+    try {
+      const all = await api<Record<string, unknown>>('/api/export');
+      if (kind === 'json') return download('confirm-remind.json', 'application/json', JSON.stringify(all, null, 2));
+      const md = ['# Confirm & Remind export', '', '## Notes', ...notes.map((n) => `\n### ${n.updated_at}\n\n${n.text}\n`), '## Tasks', ...tasks.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}${t.due_at ? ` (due ${t.due_at})` : ''}`)].join('\n');
+      download('confirm-remind.md', 'text/markdown', md);
+    } catch (e) { setMsg(errText(e)); }
+  };
+  return <>
+    <section className="card"><h2>Time zone</h2>
+      <label className="field"><span>IANA time zone</span><input value={tz} onChange={(e) => setTz(e.target.value)} /></label>
+      <button className="button" onClick={() => run(() => api('/api/prefs', 'PUT', { timezone: tz }), 'Time zone saved.')}>Save time zone</button>
+      <p className="subtle">Quiet hours are not enforced yet in this build (see README, Known limits).</p></section>
+    <section className="card"><h2>Notifications</h2>
+      <label className="check"><input type="checkbox" checked={prefs.show_title} onChange={(e) => run(() => api('/api/prefs', 'PUT', { show_title: e.target.checked }))} /> Show the task title in notifications</label>
+      <p className="subtle">Default text: “You have a reminder. Open Confirm &amp; Remind.”</p>
+      {needsHome ? <p className="warning">Add to Home Screen, open it from the icon, then tap Enable.</p> : null}
+      <div className="actions"><button className="button primary" onClick={enable} disabled={needsHome}>Enable notifications</button>
+        <button className="button" onClick={() => run(async () => { const r = await api<{ devices: number; accepted: number }>('/api/push', 'PUT'); setMsg(`Test sent to ${r.devices} device(s); ${r.accepted} accepted by the push service.`); })}>Send test notification</button></div>
+      <h3>Devices</h3>{devices.length === 0 && <p className="subtle">No devices yet.</p>}
+      {devices.map((d) => <p key={d.id}>{d.label} · {d.active ? 'Active' : 'Disabled'} <button className="button small" onClick={() => run(() => api(`/api/push?id=${d.id}`, 'DELETE'), 'Device removed.')}>Remove</button></p>)}</section>
+    <section className="card"><h2>Your data</h2><div className="actions">
+      <button className="button" onClick={() => doExport('md')}>Export Markdown</button><button className="button" onClick={() => doExport('json')}>Export JSON</button></div></section>
+    <section className="card"><h2>Account</h2><div className="actions">
+      <button className="button" onClick={onOut}>Sign out</button>
+      <button className="button danger" onClick={() => confirm('Delete your account and ALL its data? This cannot be undone.') && run(async () => { await api('/api/account', 'DELETE'); onOut(); }, 'Account deleted.')}>Delete account</button></div></section></>;
+}
