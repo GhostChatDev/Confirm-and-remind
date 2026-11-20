@@ -24,11 +24,14 @@ export async function authUser(req: Request): Promise<string | null> {
   return null;
 }
 
-type Ctx<P> = { params: Promise<P> };
+type Args = { userId: string; req: Request; store: Store; id: string; body: Record<string, unknown> };
 
-/** Wraps a route: auth, rate limit (per user), JSON errors, no note content in logs. */
-export function route<P = Record<string, never>>(fn: (a: { userId: string; req: Request; store: Store; params: P; body: Record<string, unknown> }) => Promise<unknown> | unknown, opts: { limit?: number } = {}) {
-  return async (req: Request, ctx?: Ctx<P>) => {
+/**
+ * Wraps a route: auth, rate limit (per user), JSON errors, no note content in logs.
+ * Next.js route handlers must take only (req); the record id comes from ?id=.
+ */
+export function route(fn: (a: Args) => Promise<unknown> | unknown, opts: { limit?: number } = {}) {
+  return async (req: Request) => {
     const userId = await authUser(req);
     if (!userId) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
     if (!rateLimit(`u:${userId}:${new URL(req.url).pathname}`, opts.limit ?? 60)) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
@@ -37,8 +40,8 @@ export function route<P = Record<string, never>>(fn: (a: { userId: string; req: 
       try { const j = await req.json(); if (j && typeof j === 'object') body = j as Record<string, unknown>; } catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
     }
     try {
-      const params = (ctx ? await ctx.params : {}) as P;
-      const out = await fn({ userId, req, store: globalStore, params, body });
+      const id = new URL(req.url).searchParams.get('id') || '';
+      const out = await fn({ userId, req, store: globalStore, id, body });
       return NextResponse.json(out ?? { ok: true });
     } catch (e) {
       if (e instanceof NotFoundError) return NextResponse.json({ error: 'Not found' }, { status: 404 });
