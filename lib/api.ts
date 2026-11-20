@@ -20,7 +20,8 @@ export async function authUser(req: Request): Promise<string | null> {
       return u.id || null;
     } catch { return null; }
   }
-  if (process.env.ALLOW_DEV_AUTH === '1' && process.env.NODE_ENV !== 'production' && /^dev:[A-Za-z0-9_-]{1,64}$/.test(token)) return token.slice(4);
+  // Demo mode: reached only when Supabase is NOT configured (nothing real to protect; data lives in server memory).
+  if (process.env.ALLOW_DEV_AUTH !== '0' && /^dev:[A-Za-z0-9_-]{1,64}$/.test(token)) return token.slice(4);
   return null;
 }
 

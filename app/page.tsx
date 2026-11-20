@@ -127,7 +127,7 @@ function SignIn({ onDone }: { onDone: () => void }) {
   return <main className="page"><form className="card" onSubmit={submit}>
     <h1>Confirm &amp; Remind</h1><p className="subtle">Write it down. Confirm what matters. Get reminded.</p>
     {demo && <p className="warning">Demo mode: Supabase is not configured. Pick any name; it is not verified.</p>}
-    <label className="field"><span>{demo ? 'Name' : 'Email'}</span><input value={email} onChange={(e) => setEmail(e.target.value)} type={demo ? 'text' : 'email'} autoComplete="username" required /></label>
+    <label className="field"><span>{demo ? 'Name' : 'Email'}</span><input value={email} onChange={(e) => setEmail(e.target.value)} type={demo ? 'text' : 'email'} autoComplete="username" required={!demo} placeholder={demo ? 'demo' : ''} /></label>
     {!demo && <label className="field"><span>Password</span><input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete={create ? 'new-password' : 'current-password'} required minLength={8} /></label>}
     {err && <p role="alert" className="error">{err}</p>}
     <button className="button primary" type="submit">{create ? 'Create account' : 'Sign in'}</button>
