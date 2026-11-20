@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { NotFoundError, globalStore, type Store } from './store';
 import { rateLimit } from './ratelimit';
+import { loadStore, saveStore } from './persist';
+
+// Demo mode (no Supabase keys): the mock store is mirrored to a JSON file so it survives a restart.
+const demo = () => !(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY);
 
 /**
  * Resolves the signed-in user id from the request.
@@ -42,7 +46,9 @@ export function route(fn: (a: Args) => Promise<unknown> | unknown, opts: { limit
     }
     try {
       const id = new URL(req.url).searchParams.get('id') || '';
+      if (demo()) loadStore(globalStore);
       const out = await fn({ userId, req, store: globalStore, id, body });
+      if (demo() && req.method !== 'GET') saveStore(globalStore);
       return NextResponse.json(out ?? { ok: true });
     } catch (e) {
       if (e instanceof NotFoundError) return NextResponse.json({ error: 'Not found' }, { status: 404 });
