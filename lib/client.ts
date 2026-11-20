@@ -3,7 +3,6 @@ export type Config = { url: string; anonKey: string; vapidPublicKey: string };
 
 const SESSION = 'cr-session';
 const DEMO = 'cr-demo-user';
-const SIGNED_OUT = 'cr-demo-signed-out';
 let config: Config | null = null;
 
 type Session = { access_token: string; refresh_token: string; expires_at: number };
@@ -45,7 +44,6 @@ export async function signIn(email: string, password: string, create: boolean): 
   if (!c.url || !c.anonKey) {
     const name = email.trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
     localStorage.setItem(DEMO, name || 'demo');
-    localStorage.removeItem(SIGNED_OUT);
     return '';
   }
   const res = await authCall(create ? 'signup' : 'token?grant_type=password', { email, password });
@@ -57,7 +55,6 @@ export async function signIn(email: string, password: string, create: boolean): 
 export async function signOut(): Promise<void> {
   localStorage.removeItem(SESSION);
   localStorage.removeItem(DEMO);
-  localStorage.setItem(SIGNED_OUT, '1');
 }
 
 /** The bearer token for /api, or '' when signed out. Refreshes an expiring Supabase session. */
@@ -65,11 +62,9 @@ export async function token(): Promise<string> {
   const c = await loadConfig();
   if (!c.url || !c.anonKey) {
     const n = localStorage.getItem(DEMO);
-    if (n) return `dev:${n}`;
-    if (localStorage.getItem(SIGNED_OUT)) return '';
-    // A fresh demo browser enters the shared local preview, so it sees the server's data.
-    localStorage.setItem(DEMO, 'demo');
-    return 'dev:demo';
+    // Demo mode: each person signs in with their own name; nobody is signed in automatically, so one
+    // visitor never sees another's notes.
+    return n ? `dev:${n}` : '';
   }
   const s = readSession();
   if (!s) return '';

@@ -227,6 +227,11 @@ jobs:
           const RAND = Math.floor(Math.random() * 900000 + 100000);
           const CREDS = { email: "ghost" + RAND + "@example.com", user: "ghost" + RAND, pass: "Gh0st-" + RAND + "-pw", name: "Ghost Tester" };
           const askingPassword = async (page) => (await page.locator("input[type='password']").filter({ visible: true }).count().catch(() => 0)) > 0;
+          // A sign-in screen: a password box, an email box, or a "Sign in" / "Log in" button.
+          const signInScreen = async (page) =>
+            (await askingPassword(page)) ||
+            (await page.locator("input[type='email'], input[autocomplete='email'], input[autocomplete='username']").filter({ visible: true }).count().catch(() => 0)) > 0 ||
+            (await page.getByRole("button", { name: /sign ?in|log ?in|sign ?up|create account/i }).filter({ visible: true }).count().catch(() => 0)) > 0;
           const clickText = async (page, re) => {
             for (const role of ["button", "link", "tab"]) {
               const t = page.getByRole(role, { name: re }).filter({ visible: true }).first();
@@ -463,7 +468,9 @@ jobs:
                   for (let b = 0; b < Math.min(await boxes.count(), 8); b++) {
                     const isSearch = await boxes.nth(b).evaluate((el) => {
                       const hint = ((el.placeholder || "") + " " + (el.getAttribute("aria-label") || "") + " " + (el.name || "") + " " + (el.id || "")).toLowerCase();
-                      return Boolean(el.closest("[role='search'], .search, .searchbox, .search-bar, .filters")) || /search|find|filter|look ?up/.test(hint);
+                      // A sign-in box (email, user name) isn't somewhere to add things: typing there signs in as that name.
+                      const signIn = el.type === "email" || /^(email|username)$/.test(el.getAttribute("autocomplete") || "") || /e-?mail|user ?name|log ?in|sign ?in|password/.test(hint);
+                      return signIn || Boolean(el.closest("[role='search'], .search, .searchbox, .search-bar, .filters")) || /search|find|filter|look ?up/.test(hint);
                     }).catch(() => false);
                     if (!isSearch) { box = boxes.nth(b); found = true; break; }
                   }
@@ -506,7 +513,8 @@ jobs:
                         await op.waitForTimeout(WAIT * 1200);
                         // An app with accounts: the same person logs in on the other browser (their data is private).
                         if (report.login && report.login.result === "ok" && (await askingPassword(op))) { await logIn(op, CREDS.pass); await op.waitForTimeout(WAIT * 800); }
-                        report.crossBrowser = { result: (await shows(op)) ? "seen" : "not seen", word: MARK };
+                        const seen = await shows(op);
+                        report.crossBrowser = { result: seen ? "seen" : (await signInScreen(op)) ? "private (the other browser is signed out)" : "not seen", word: MARK };
                         await other.close();
                       }
                     }
