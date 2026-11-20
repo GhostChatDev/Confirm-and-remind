@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { readDraft, writeDraft } from '../lib/draft';
 import { defaults, formatDate, markdown, tomorrowMorning, uid, type Note, type Task, type Preferences } from '../lib/model';
 
@@ -17,10 +17,11 @@ export default function Home() {
   const [dialog,setDialog]=useState<'note'|'task'|null>(null); const [editing,setEditing]=useState<string|null>(null);
   const [text,setText]=useState(''); const [title,setTitle]=useState(''); const [due,setDue]=useState(''); const [remind,setRemind]=useState('');
   const [filter,setFilter]=useState('open'); const [search,setSearch]=useState(''); const [message,setMessage]=useState('');
+  const draftRevision = useRef(0);
   useEffect(()=>{ setNotes(load('cr-notes',[])); setTasks(load('cr-tasks',[])); setPrefs(load('cr-prefs',defaults)); setReady(true); if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{}); },[]);
-  useEffect(()=>{ if(ready) {localStorage.setItem('cr-notes',JSON.stringify(notes));localStorage.setItem('cr-tasks',JSON.stringify(tasks));localStorage.setItem('cr-prefs',JSON.stringify(prefs));} },[notes,tasks,prefs,ready]);
-  const openNote=async (note?:Note)=>{setEditing(note?.id||null);setText(note?.text||'');setDialog('note');if(!note){try{const draft=await readDraft('new-note');if(draft)setText(draft);}catch{setMessage('Draft recovery is unavailable in this browser.');}}};
-  const saveNote=()=>{if(!text.trim())return;const now=new Date().toISOString();setNotes(current=>editing?current.map(n=>n.id===editing?{...n,text,version:(n.version || 1)+1,updated_at:now}:n):[{id:uid(),text,pinned:false,version:1,created_at:now,updated_at:now},...current]); if(!editing)void writeDraft('new-note','').catch(()=>{});setDialog(null);setScreen('Notes');};
+  useEffect(()=>{ if(ready) {try {localStorage.setItem('cr-notes',JSON.stringify(notes));localStorage.setItem('cr-tasks',JSON.stringify(tasks));localStorage.setItem('cr-prefs',JSON.stringify(prefs));} catch {setMessage('Device storage failed. Recent changes may not survive a reload; export your data.');}} },[notes,tasks,prefs,ready]);
+  const openNote=async (note?:Note)=>{const revision=++draftRevision.current;setEditing(note?.id||null);setText(note?.text||'');setDialog('note');if(!note){try{const draft=await readDraft('new-note');if(draft && draftRevision.current===revision)setText(draft);}catch{setMessage('Draft recovery is unavailable in this browser.');}}};
+  const saveNote=()=>{if(!text.trim())return;const now=new Date().toISOString();const next=editing?notes.map(n=>n.id===editing?{...n,text,version:(n.version || 1)+1,updated_at:now}:n):[{id:uid(),text,pinned:false,version:1,created_at:now,updated_at:now},...notes];try{localStorage.setItem('cr-notes',JSON.stringify(next));}catch{setMessage('Could not save this note on this device. Your draft has not been cleared.');return;}setNotes(next);draftRevision.current++;if(!editing)void writeDraft('new-note','').catch(()=>setMessage('Note saved, but its draft could not be cleared.'));setDialog(null);setScreen('Notes');};
   const saveTask=()=>{if(!title.trim())return;const task:Task={id:uid(),title,due_at:due?new Date(due).toISOString():null,reminder_at:remind?new Date(remind).toISOString():null,status:'open',created_at:new Date().toISOString()};setTasks(t=>[task,...t]);setTitle('');setDue('');setRemind('');setDialog(null);setScreen('Upcoming');};
   const updateTask=(id:string,patch:Partial<Task>)=>setTasks(t=>t.map(item=>item.id===id?{...item,...patch}:item));
   const filteredNotes=notes.filter(n=>n.text.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>Number(b.pinned)-Number(a.pinned));
