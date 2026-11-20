@@ -30,14 +30,14 @@ Open the address printed by the server. For development, use `npm run dev`. Brow
 - No scheduler, occurrence claiming, retries, cancellation checks, push delivery, device registration or test notification. The Enable notifications control explains that it is unavailable; it does not request permission.
 - No actual account deletion, note version history, server search, reminder rescheduling screen, quiet-hour enforcement or title-visibility preference.
 - Time inputs use the browser's local time, not the time zone entered in Settings. The time zone is used for display only. Recurring reminders are not implemented in the interface or scheduler.
-- The migration is an **unverified schema draft**, not a deployable security boundary. In particular, related records can reference another user's IDs without same-owner foreign key enforcement, and some server-owned status tables permit user writes. Do not apply it to a real project until ownership, RLS and privileges have been reviewed and tested with multiple users.
+- The migration is an **unverified schema draft**, not a deployable security boundary. It deliberately stops with an error to prevent accidental deployment. Related records can reference another user's IDs without same-owner foreign key enforcement, and some server-owned status tables permit user writes. Ownership, RLS and privileges must be secured and tested with multiple users before it can be used.
 - The current tests do not establish authorization, notification delivery, durable draft recovery or account deletion. End-to-end delivery and the requested security tests remain outstanding.
 
 ## Supabase, push and scheduler setup
 
 These steps are **not sufficient to enable reminders** until the missing backend is built and the schema is secured:
 
-1. Create a Supabase project and review/test the migration in `supabase/migrations` before applying it. Never run the unverified migration against production data.
+1. Create a Supabase project. The migration in `supabase/migrations` is deliberately blocked; the backend and migration must be secured and tested before any application to a real project.
 2. Copy `.env.example` to `.env.local` and fill in the Supabase values and app origin. The service-role key must remain server-side.
 3. Generate a VAPID key pair with `npx web-push generate-vapid-keys`. Store the private key and contact address only in server environment variables. Never commit secrets.
 4. Implement and deploy an authenticated scheduler and dispatch worker before configuring a scheduled job. There is no scheduler endpoint to configure yet.

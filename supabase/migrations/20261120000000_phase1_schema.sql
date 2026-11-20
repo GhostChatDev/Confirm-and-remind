@@ -1,5 +1,10 @@
--- Confirm & Remind Phase 1 Schema + Phase 2 AI Suggestions Reservation
--- Postgres / Supabase migration with strict Row-Level Security (RLS) on every user table.
+-- UNFINISHED SCHEMA DRAFT: DO NOT DEPLOY.
+-- Related records do not yet enforce same-owner references and some server-owned
+-- tables permit client writes. Authorization and dispatch have not been tested.
+-- This deliberate failure prevents accidental application to a live project.
+do $$ begin
+  raise exception 'Unfinished schema draft: ownership and RLS must be secured and tested before deployment';
+end $$;
 
 create extension if not exists "pgcrypto";
 
